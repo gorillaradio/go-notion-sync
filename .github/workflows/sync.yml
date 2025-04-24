@@ -3,7 +3,7 @@ name: Notion Sync
 on:
   schedule:
     # Esegue ogni 5 minuti
-    - cron: '*/15 * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch: {}
 
 jobs:

@@ -12,7 +12,7 @@ jobs:
     env:
       NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
       DATABASES_SRC: ${{ secrets.DATABASES_SRC }}
-      DATABASE_HUB: ${{ secrets.DATABASES_HUB }}
+      DATABASE_HUB: ${{ secrets.DATABASE_HUB }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v3

@@ -208,4 +208,55 @@ async function syncAll() {
               if (val.email) props[key] = { email: val.email };
               break;
             case "phone_number":
-              if (val.phone_number) props[key] = { phone_number: val.phone_ endeavour truncated...
+              if (val.phone_number) props[key] = { phone_number: val.phone_number };
+              break;
+            case "files":
+              if (val.files.length) props[key] = { files: val.files };
+              break;
+            case "status":
+              if (val.status) props[key] = { status: { name: val.status.name } };
+              break;
+          }
+        }
+
+        await notion.pages.update({ page_id: sourcePageId, properties: props });
+        console.log(`→ Reverse synced Hub ${hubPage.id} to Source ${sourcePageId}`);
+      }
+    } catch (e) {
+      console.error(`Error retrieving or updating source page ${sourcePageId}:`, e);
+    }
+  }
+
+  console.log("➡️ Running forward sync to apply Source changes to Hub");
+  for (const dbId of SOURCES) {
+    const pages = await fetchTasks(dbId);
+    console.log(`Found ${pages.length} pages in ${dbId}`);
+    for (const pg of pages) {
+      console.log(`→ Forward sync check for source page: ${pg.id}`);
+
+      const deleted = pg.properties.Deleted?.checkbox;
+      if (deleted) {
+        console.log(`→ Skipping source page ${pg.id} because Deleted flag is true`);
+        continue;
+      }
+
+      const hubPageId = await getHubPageId(pg.id);
+      if (!hubPageId) {
+        await syncPageToHub(pg, dbId);
+      } else {
+        await updateHubPage(hubPageId, pg, dbId);
+      }
+    }
+  }
+
+  console.log("Sync completed.");
+}
+
+// 7) Avvia la sincronizzazione
+(async () => {
+  try {
+    await syncAll();
+  } catch (e) {
+    console.error("Error during sync:", e);
+  }
+})();

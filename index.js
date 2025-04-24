@@ -41,7 +41,7 @@ async function getHubPageId(pageId) {
 }
 
 // 5a) Sincronizza una pagina nel DB Hub copiando le proprietà supportate
-async function syncPageToHub(page) {
+async function syncPageToHub(page, sourceDbId) {
   const src = page.properties;
   const props = {};
   for (const [key, val] of Object.entries(src)) {
@@ -69,20 +69,24 @@ async function syncPageToHub(page) {
       props[key] = { phone_number: val.phone_number };
     } else if (val.type === "files" && val.files.length) {
       props[key] = { files: val.files };
+    } else if (val.type === "status" && val.status) {
+      props[key] = { status: { name: val.status.name } };
     }
   }
   // Aggiungi sempre Source
   props.Source = { rich_text: [{ text: { content: page.id } }] };
+  // Aggiungi Source DB
+  props["Source DB"] = { rich_text: [{ text: { content: sourceDbId } }] };
 
   await notion.pages.create({
     parent: { database_id: HUB_DB },
     properties: props,
   });
-  console.log(`→ Synced ${page.id}`);
+  console.log(`→ Synced ${page.id} from DB ${sourceDbId}`);
 }
 
 // 5b) Aggiorna una pagina esistente in Hub
-async function updateHubPage(hubPageId, page) {
+async function updateHubPage(hubPageId, page, sourceDbId) {
   const src = page.properties;
   const props = {};
   for (const [key, val] of Object.entries(src)) {
@@ -124,16 +128,15 @@ async function updateHubPage(hubPageId, page) {
         if (val.files.length) props[key] = { files: val.files };
         break;
       case "status":
-        if (val.status) {
-          props[key] = { status: { name: val.status.name } };
-          console.log(`    → Syncing status ${key} = ${val.status.name}`);
-        }
+        if (val.status) props[key] = { status: { name: val.status.name } };
         break;
     }
   }
   props.Source = { rich_text: [{ text: { content: page.id } }] };
+  props["Source DB"] = { rich_text: [{ text: { content: sourceDbId } }] };
+
   await notion.pages.update({ page_id: hubPageId, properties: props });
-  console.log(`→ Updated Hub page ${hubPageId} for source ${page.id}`);
+  console.log(`→ Updated Hub page ${hubPageId} for source ${page.id} (DB ${sourceDbId})`);
 }
 
 // 6) Esegui la sync batch
@@ -152,9 +155,7 @@ async function syncAll() {
     const hubDeleted = hubPage.properties.Deleted?.checkbox;
     if (hubDeleted) {
       await notion.pages.update({ page_id: sourcePageId, properties: { Deleted: { checkbox: true } } });
-      console.log(
-        `→ Marked source page ${sourcePageId} as Deleted because Hub page ${hubPage.id} has Deleted flag`
-      );
+      console.log(`→ Marked source page ${sourcePageId} as Deleted because Hub page ${hubPage.id} has Deleted flag`);
       continue;
     }
 
@@ -207,73 +208,4 @@ async function syncAll() {
               if (val.email) props[key] = { email: val.email };
               break;
             case "phone_number":
-              if (val.phone_number) props[key] = { phone_number: val.phone_number };
-              break;
-            case "files":
-              if (val.files.length) props[key] = { files: val.files };
-              break;
-            case "status":
-              if (val.status) {
-                props[key] = { status: { name: val.status.name } };
-                console.log(`    → Syncing status ${key} = ${val.status.name}`);
-              }
-              break;
-          }
-        }
-
-        await notion.pages.update({ page_id: sourcePageId, properties: props });
-        console.log(
-          `→ Reverse synced Hub ${hubPage.id} to Source ${sourcePageId}`
-        );
-      }
-    } catch (e) {
-      console.error(
-        `Error retrieving or updating source page ${sourcePageId}:`,
-        e
-      );
-    }
-  }
-
-  console.log("➡️ Running forward sync to apply Source changes to Hub");
-  for (const dbId of SOURCES) {
-    const pages = await fetchTasks(dbId);
-    console.log(`Found ${pages.length} pages in ${dbId}`);
-    for (const pg of pages) {
-      console.log(`→ Forward sync check for source page: ${pg.id}`);
-
-      const deleted = pg.properties.Deleted?.checkbox;
-      const sourceLastEdited = pg.properties.Modificato.last_edited_time;
-      const hubPageId = await getHubPageId(pg.id);
-
-      if (deleted) {
-        console.log(
-          `→ Skipping source page ${pg.id} because Deleted flag is true`
-        );
-        continue;
-      }
-
-      console.log(
-        ">> Forward sync action for source page:",
-        pg.id,
-        "hubPageId:",
-        hubPageId
-      );
-
-      if (!hubPageId) {
-        await syncPageToHub(pg);
-      } else {
-        await updateHubPage(hubPageId, pg);
-      }
-    }
-  }
-  console.log("Sync completed.");
-}
-
-// 7) Avvia la sincronizzazione
-(async () => {
-  try {
-    await syncAll();
-  } catch (e) {
-    console.error("Error during sync:", e);
-  }
-})();
+              if (val.phone_number) props[key] = { phone_number: val.phone_ endeavour truncated...

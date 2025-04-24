@@ -11,6 +11,7 @@ const notion = new Client({ auth: process.env.NOTION_TOKEN });
 const SOURCES = JSON.parse(process.env.DATABASES_SRC);
 const HUB_DB = process.env.DATABASE_HUB;
 
+// Fetch all pages from a database
 async function fetchTasks(dbId) {
   const pages = [];
   let cursor;
@@ -25,6 +26,7 @@ async function fetchTasks(dbId) {
   return pages;
 }
 
+// Get the Hub page ID corresponding to a source page
 async function getHubPageId(pageId) {
   const resp = await notion.databases.query({
     database_id: HUB_DB,
@@ -36,10 +38,10 @@ async function getHubPageId(pageId) {
   return resp.results[0]?.id || null;
 }
 
-async function syncPageToHub(page) {
-  const src = page.properties;
+// Map properties generically from a page
+function mapProperties(srcProps) {
   const props = {};
-  for (const [key, val] of Object.entries(src)) {
+  for (const [key, val] of Object.entries(srcProps)) {
     switch (val.type) {
       case "title":
         if (val.title.length) props[key] = { title: val.title };
@@ -77,119 +79,93 @@ async function syncPageToHub(page) {
       case "files":
         if (val.files.length) props[key] = { files: val.files };
         break;
+      // skip formula, rollup, created_time, last_edited_time
     }
   }
-  props.Source = { rich_text: [{ text: { content: page.id } }] };
-
-  await notion.pages.create({
-    parent: { database_id: HUB_DB },
-    properties: props,
-  });
-  console.log(`→ Synced ${page.id}`);
+  return props;
 }
 
-async function updateHubPage(hubPageId, page) {
-  const src = page.properties;
-  const props = {};
-  for (const [key, val] of Object.entries(src)) {
-    if (key === "Source" || key === "Deleted") continue;
-    console.log(`      Inspecting property: ${key}, type=${val.type}, select=`, val.select);
-    switch (val.type) {
-      case "title":
-        if (val.title.length) props[key] = { title: val.title };
-        break;
-      case "rich_text":
-        if (val.rich_text.length) props[key] = { rich_text: val.rich_text };
-        break;
-      case "select":
-        if (val.select) {
-          console.log(`        → syncing select ${key} = ${val.select.name}`);
-          props[key] = { select: { name: val.select.name } };
-        }
-        break;
-      case "multi_select":
-        if (val.multi_select.length) props[key] = { multi_select: val.multi_select };
-        break;
-      case "date":
-        if (val.date) props[key] = { date: { start: val.date.start } };
-        break;
-      case "people":
-        if (val.people.length) props[key] = { people: val.people };
-        break;
-      case "checkbox":
-        props[key] = { checkbox: val.checkbox };
-        break;
-      case "number":
-        if (val.number !== null) props[key] = { number: val.number };
-        break;
-      case "url":
-        if (val.url) props[key] = { url: val.url };
-        break;
-      case "email":
-        if (val.email) props[key] = { email: val.email };
-        break;
-      case "phone_number":
-        if (val.phone_number) props[key] = { phone_number: val.phone_number };
-        break;
-      case "files":
-        if (val.files.length) props[key] = { files: val.files };
-        break;
-    }
-  }
+// Create a new page in Hub
+async function syncPageToHub(page) {
+  const props = mapProperties(page.properties);
   props.Source = { rich_text: [{ text: { content: page.id } }] };
+  await notion.pages.create({ parent: { database_id: HUB_DB }, properties: props });
+  console.log(`→ Created Hub page for source ${page.id}`);
+}
 
-  await notion.pages.update({
-    page_id: hubPageId,
-    properties: props,
-  });
+// Update an existing Hub page
+async function updateHubPage(hubPageId, page) {
+  const props = mapProperties(page.properties);
+  props.Source = { rich_text: [{ text: { content: page.id } }] };
+  await notion.pages.update({ page_id: hubPageId, properties: props });
   console.log(`→ Updated Hub page ${hubPageId} for source ${page.id}`);
 }
 
+// Update the source page properties
+async function updateSourcePage(sourcePageId, hubPage) {
+  const props = mapProperties(hubPage.properties);
+  // Preserve Source and Deleted in Hub, skip them here
+  delete props.Source;
+  delete props.Deleted;
+  await notion.pages.update({ page_id: sourcePageId, properties: props });
+  console.log(`→ Updated Source page ${sourcePageId} from Hub ${hubPage.id}`);
+}
+
+// Main sync function
 async function syncAll() {
   console.log("🔁 syncAll() called");
 
-  console.log("🔃 Running reverse sync first to apply Hub changes to Source");
+  // Reverse sync: Hub -> Source
+  console.log("🔃 Running reverse sync from Hub to Source");
   const hubPages = await fetchTasks(HUB_DB);
-  console.log(`Found ${hubPages.length} pages in Hub for reverse sync`);
   for (const hubPage of hubPages) {
-    // reverse sync logic...
+    const sourceProp = hubPage.properties.Source;
+    if (!sourceProp?.rich_text.length) continue;
+    const sourcePageId = sourceProp.rich_text[0].text.content;
+    const hubDeleted = hubPage.properties.Deleted?.checkbox;
+
+    if (hubDeleted) {
+      await notion.pages.update({ page_id: sourcePageId, properties: { Deleted: { checkbox: true } } });
+      console.log(`→ Marked Source ${sourcePageId} Deleted (from Hub ${hubPage.id})`);
+      continue;
+    }
+
+    const hubLastEdited = new Date(hubPage.last_edited_time);
+    const sourcePage = await notion.pages.retrieve({ page_id: sourcePageId });
+    const sourceLastEdited = new Date(sourcePage.last_edited_time);
+
+    if (hubLastEdited > sourceLastEdited) {
+      await updateSourcePage(sourcePageId, hubPage);
+    }
   }
 
-  console.log("➡️ Running forward sync to apply Source changes to Hub");
+  // Forward sync: Source -> Hub
+  console.log("➡️ Running forward sync from Source to Hub");
   for (const dbId of SOURCES) {
     const pages = await fetchTasks(dbId);
-    console.log(`Found ${pages.length} pages in ${dbId}`);
-    for (const pg of pages) {
-      console.log(`→ Forward sync check for source page: ${pg.id}`);
-      console.log(`    Available properties on source:`, Object.keys(pg.properties).join(', '));
+    for (const page of pages) {
+      const deleted = page.properties.Deleted?.checkbox;
+      if (deleted) continue;
+      const hubPageId = await getHubPageId(page.id);
+      const sourceLastEdited = new Date(page.last_edited_time);
 
-      const deleted = pg.properties.Deleted?.checkbox;
-      const hubPageId = await getHubPageId(pg.id);
-
-      if (deleted) {
-        console.log(`→ Skipping source page ${pg.id} because Deleted flag is true`);
-        continue;
-      }
-
-      const sourceLastEdited = pg.last_edited_time;
       if (!hubPageId) {
-        await syncPageToHub(pg);
+        await syncPageToHub(page);
       } else {
         const hubPage = await notion.pages.retrieve({ page_id: hubPageId });
-        const hubLastEdited = hubPage.last_edited_time;
-        console.log(`    Timestamps → source: ${sourceLastEdited}, hub: ${hubLastEdited}`);
-        if (new Date(sourceLastEdited) > new Date(hubLastEdited)) {
-          console.log(`    → Updating Hub page because source is newer`);
-          await updateHubPage(hubPageId, pg);
-        } else {
-          console.log(`    → Skipping update: source not newer`);
+        const hubLastEdited = new Date(hubPage.last_edited_time);
+
+        if (sourceLastEdited > hubLastEdited) {
+          await updateHubPage(hubPageId, page);
         }
       }
     }
   }
+
   console.log("Sync completed.");
 }
 
+// Execute
 (async () => {
   try {
     await syncAll();

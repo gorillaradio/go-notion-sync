@@ -123,6 +123,12 @@ async function updateHubPage(hubPageId, page) {
       case "files":
         if (val.files.length) props[key] = { files: val.files };
         break;
+      case "status":
+        if (val.status) {
+          props[key] = { status: { name: val.status.name } };
+          console.log(`    → Syncing status ${key} = ${val.status.name}`);
+        }
+        break;
     }
   }
   props.Source = { rich_text: [{ text: { content: page.id } }] };
@@ -205,6 +211,12 @@ async function syncAll() {
               break;
             case "files":
               if (val.files.length) props[key] = { files: val.files };
+              break;
+            case "status":
+              if (val.status) {
+                props[key] = { status: { name: val.status.name } };
+                console.log(`    → Syncing status ${key} = ${val.status.name}`);
+              }
               break;
           }
         }

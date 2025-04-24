@@ -4,9 +4,7 @@ on:
   schedule:
     # Esegue ogni 5 minuti
     - cron: '*/15 * * * *'
-  workflow_dispatch:
-  repository_dispatch:
-    types: [notion_sync]
+  workflow_dispatch: {}
 
 jobs:
   sync:
